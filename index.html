@@ -17,11 +17,12 @@
 <div class="footnote">MapLayout Studio · Thiết kế: Long Ngo · MIT 2026. Dữ liệu của người dùng không được tự động tải lên máy chủ.</div>
 </aside>
 <main class="workspace"><div class="bar"><strong>BẢN ĐỒ TƯƠNG TÁC</strong><span>Chọn khu vực và điều chỉnh phạm vi</span><button id="extent" class="btn">▧ Dùng khung nhìn</button><button id="rectangle" class="btn">▢ Chọn hình chữ nhật</button><span class="status" id="status">Sẵn sàng</span></div><div class="editor"><div class="map-shell"><div id="map"></div><div class="map-note">Ctrl + cuộn: thu phóng khung xem · Dữ liệu nền © nhà cung cấp</div></div><div class="paper-toolbar"><b>TRANG THIẾT KẾ · SVG / mm</b><div class="flex"><button id="minus" class="btn">−</button><span id="zoomText">100%</span><button id="plus" class="btn">+</button><button id="fit" class="btn">Vừa</button><button id="refresh" class="btn">Làm mới ảnh</button></div></div><div class="paper-wrap"><div class="page" id="page"><svg id="paper" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 297 210"></svg></div></div></div></main></div>
-<script src="https://unpkg.com/maplibre-gl@5.7.1/dist/maplibre-gl.js"></script><script src="https://cdn.jsdelivr.net/npm/@tmcw/togeojson@7.1.2/dist/togeojson.umd.js"></script><script src="https://unpkg.com/jszip@3.10.1/dist/jszip.min.js"></script><script src="https://unpkg.com/shpjs@6.1.0/dist/shp.min.js"></script><script src="https://unpkg.com/jspdf@2.5.2/dist/jspdf.umd.min.js"></script>
+<script src="https://unpkg.com/maplibre-gl@5.7.1/dist/maplibre-gl.js"></script><script src="https://cdn.jsdelivr.net/npm/pmtiles@4.5.0/dist/pmtiles.js"></script><script src="https://cdn.jsdelivr.net/npm/@tmcw/togeojson@7.1.2/dist/togeojson.umd.js"></script><script src="https://unpkg.com/jszip@3.10.1/dist/jszip.min.js"></script><script src="https://unpkg.com/shpjs@6.1.0/dist/shp.min.js"></script><script src="https://unpkg.com/jspdf@2.5.2/dist/jspdf.umd.min.js"></script>
 <script>
 (()=>{'use strict';
 const $=id=>document.getElementById(id),NS='http://www.w3.org/2000/svg',esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[c]));
 const backgrounds={
+'Mapbasic2 · Vietflex (PMTiles)':'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',
 'OpenStreetMap':'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
 'Carto Light':'https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png',
 'Carto Dark':'https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
@@ -34,9 +35,53 @@ const backgrounds={
 'OpenTopoMap':'https://a.tile.opentopomap.org/{z}/{x}/{y}.png',
 'OpenStreetMap HOT':'https://a.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png'
 };
-const state={w:297,h:210,basemap:'Carto Light',features:[],items:[],legend:[],snapshot:'',snapBounds:null,zoom:1,tool:'select',drag:null,rectMode:false,options:{north:true,scale:true,legend:true,grid:true,overview:true,region:true,meta:true}};
+const state={w:297,h:210,basemap:'Mapbasic2 · Vietflex (PMTiles)',features:[],items:[],legend:[],snapshot:'',snapBounds:null,zoom:1,tool:'select',drag:null,rectMode:false,options:{north:true,scale:true,legend:true,grid:true,overview:true,region:true,meta:true}};
 Object.keys(backgrounds).forEach(n=>$('basemap').add(new Option(n,n)));$('basemap').value=state.basemap;$('date').value=new Date().toISOString().slice(0,10);
 const style=n=>({version:8,sources:{base:{type:'raster',tiles:[backgrounds[n]],tileSize:256,attribution:'© OpenStreetMap contributors · nguồn bản đồ nền'}},layers:[{id:'base',type:'raster',source:'base'}]});
+// Mapbasic2 is a PMTiles archive, not an XYZ raster tile service.
+const MAPBASIC2='Mapbasic2 · Vietflex (PMTiles)';
+const MAPBASIC2_URL='https://pub-c4fd9d1f887041be97a2542a7664ff95.r2.dev/basemap.pmtiles?v=2026-10-07-2';
+const proto=window.pmtiles?new pmtiles.Protocol({metadata:true}):null;
+if(proto)maplibregl.addProtocol('pmtiles',proto.tile);
+let mapbasicRequest=0;
+async function attachMapbasic2(){
+  const request=++mapbasicRequest;
+  if(state.basemap!==MAPBASIC2)return;
+  if(!proto){message('PMTiles chưa được tải. Đang dùng nền Esri dự phòng.');return}
+  try {
+    message('Đang kiểm tra Mapbasic2 từ Cloudflare R2…');
+    const archive=new pmtiles.PMTiles(MAPBASIC2_URL);
+    proto.add(archive);
+    const header=await Promise.race([archive.getHeader(),new Promise((_,reject)=>setTimeout(()=>reject(Error('Hết thời gian chờ PMTiles (12 giây)')),12000))]);
+    if(request!==mapbasicRequest||state.basemap!==MAPBASIC2||!map.isStyleLoaded())return;
+    const sourceId='mapbasic2-source';
+    const type=header.tileType===1?'vector':'raster';
+    if(!map.getSource(sourceId))map.addSource(sourceId,{type,url:'pmtiles://'+MAPBASIC2_URL,attribution:'© Vietflex Mapbasic2',...(type==='raster'?{tileSize:256}:{})});
+    if(type==='raster'){
+      map.addLayer({id:'mapbasic2-raster',type:'raster',source:sourceId,paint:{'raster-opacity':1,'raster-fade-duration':0}});
+    }else{
+      const metadata=await archive.getMetadata();
+      if(request!==mapbasicRequest||!map.isStyleLoaded())return;
+      let v=metadata.vector_layers;
+      if(!Array.isArray(v)&&metadata.json){try{v=JSON.parse(metadata.json).vector_layers}catch(_){}}
+      const names=[...new Set((Array.isArray(v)?v:[]).map(x=>typeof x==='string'?x:x.id).filter(Boolean))];
+      if(!names.length)throw Error('PMTiles vector chưa có metadata vector_layers');
+      names.forEach((name,i)=>{
+        const key='mapbasic2-'+i,common={source:sourceId,'source-layer':name};
+        map.addLayer({id:key+'-fill',type:'fill',...common,filter:['==',['geometry-type'],'Polygon'],paint:{'fill-color':'#cbd5db','fill-opacity':.55}});
+        map.addLayer({id:key+'-line',type:'line',...common,filter:['==',['geometry-type'],'LineString'],paint:{'line-color':'#668398','line-width':1}});
+        map.addLayer({id:key+'-point',type:'circle',...common,filter:['==',['geometry-type'],'Point'],paint:{'circle-color':'#355c8b','circle-radius':3}});
+      });
+    }
+    // Imported GeoJSON layers must render above the PMTiles archive.
+    state.features.forEach(f=>['-fill','-line','-point'].forEach(id=>{if(map.getLayer(f.id+id))map.moveLayer(f.id+id)}));
+    message('Mapbasic2 đã kết nối · '+(type==='raster'?'Raster':'Vector')+' PMTiles');
+    setTimeout(refresh,500);
+  }catch(error){
+    console.warn('Mapbasic2 could not be loaded; Esri fallback remains visible',error);
+    if(request===mapbasicRequest&&state.basemap===MAPBASIC2)message('Mapbasic2 không tải được: '+error.message+' · Esri đang dự phòng');
+  }
+}
 const map=new maplibregl.Map({container:'map',style:style(state.basemap),center:[105.85,10.07],zoom:6,preserveDrawingBuffer:true,attributionControl:true});map.addControl(new maplibregl.NavigationControl(),'top-right');
 const message=s=>$('status').textContent=s;
 function overlays(){state.features.filter(f=>f.visible).forEach(f=>{if(!map.getSource(f.id))map.addSource(f.id,{type:'geojson',data:f.geojson});if(!map.getLayer(f.id+'-fill'))map.addLayer({id:f.id+'-fill',type:'fill',source:f.id,paint:{'fill-color':f.color,'fill-opacity':.20},filter:['==',['geometry-type'],'Polygon']});if(!map.getLayer(f.id+'-line'))map.addLayer({id:f.id+'-line',type:'line',source:f.id,paint:{'line-color':f.color,'line-width':2}});if(!map.getLayer(f.id+'-point'))map.addLayer({id:f.id+'-point',type:'circle',source:f.id,paint:{'circle-radius':5,'circle-color':f.color},filter:['==',['geometry-type'],'Point']})})}
@@ -44,7 +89,7 @@ function syncLayers(){const node=$('layers');node.replaceChildren();state.featur
 const colors=['#ec4b52','#376ce1','#13a98f','#d78a29','#a34dc4'];
 function addGeojson(data,name){const list=Array.isArray(data)?data:[data];list.forEach((geo,i)=>{if(geo.type==='Feature')geo={type:'FeatureCollection',features:[geo]};if(!geo||!geo.type)return;state.features.push({id:'geo'+Date.now()+Math.random().toString(36).slice(2,7),name:list.length>1?name+' '+(i+1):name,geojson:geo,color:colors[state.features.length%colors.length],visible:true})});syncLayers();updateLegend();if(map.isStyleLoaded())overlays();refresh()}
 async function importFile(file){try{const ext=file.name.split('.').pop().toLowerCase(),buf=await file.arrayBuffer();let geo;if(ext==='geojson'||ext==='json')geo=JSON.parse(new TextDecoder().decode(buf));else if(ext==='kml'||ext==='gpx'){const xml=new DOMParser().parseFromString(new TextDecoder().decode(buf),'application/xml');if(xml.querySelector('parsererror'))throw Error('XML không hợp lệ');geo=ext==='kml'?toGeoJSON.kml(xml):toGeoJSON.gpx(xml)}else if(ext==='zip'){try{geo=await shp(buf)}catch(e){const zip=await JSZip.loadAsync(buf),entry=Object.values(zip.files).find(x=>/\.kml$/i.test(x.name));if(!entry)throw e;geo=toGeoJSON.kml(new DOMParser().parseFromString(await entry.async('string'),'text/xml'))}}else if(ext==='kmz'){const zip=await JSZip.loadAsync(buf),entry=Object.values(zip.files).find(x=>/\.kml$/i.test(x.name));if(!entry)throw Error('KMZ thiếu KML');geo=toGeoJSON.kml(new DOMParser().parseFromString(await entry.async('string'),'text/xml'))}else throw Error('Định dạng chưa hỗ trợ');addGeojson(geo,file.name);message('Đã nhập '+file.name)}catch(e){message('Lỗi nhập: '+e.message)}}$('files').onchange=async e=>{for(const f of e.target.files)await importFile(f)};
-$('basemap').onchange=e=>{state.basemap=e.target.value;map.setStyle(style(state.basemap));};map.on('style.load',()=>{overlays();setTimeout(refresh,650)});map.on('moveend',()=>{if(!state.rectMode)refresh()});map.on('idle',()=>{if(!state.snapshot)refresh()});
+$('basemap').onchange=e=>{++mapbasicRequest;state.basemap=e.target.value;state.snapshot='';message('Đang tải nền '+state.basemap+'…');map.setStyle(style(state.basemap));};map.on('style.load',()=>{overlays();if(state.basemap===MAPBASIC2)attachMapbasic2();setTimeout(refresh,650)});map.on('moveend',()=>{if(!state.rectMode)refresh()});map.on('idle',()=>{if(!state.snapshot)refresh()});
 const config=[['north','Mũi tên Bắc'],['scale','Thước tỷ lệ'],['legend','Chú giải'],['grid','Lưới tọa độ'],['overview','Bản đồ phụ quốc gia'],['region','Bản đồ phụ vùng'],['meta','CRS và nguồn']];
 config.forEach(([id,name])=>{const l=document.createElement('label');l.className='check';l.innerHTML='<input type="checkbox" checked> '+name;l.querySelector('input').onchange=e=>{state.options[id]=e.target.checked;refresh()};$('options').append(l)});
 const tools=[['select','↖'],['line','╱'],['arrow','↗'],['circle','◯'],['point','●'],['rect','▢']];tools.forEach(([t,icon])=>{const b=document.createElement('button');b.className='btn'+(t==='select'?' active':'');b.title=t;b.textContent=icon;b.onclick=()=>{state.tool=t;document.querySelectorAll('#tools button').forEach(x=>x.classList.remove('active'));b.classList.add('active')};$('tools').append(b)});
